@@ -1,32 +1,33 @@
+parameters {
+    string(name: 'ENV_CREDENTIAL_ID', defaultValue: '', description: 'Credential ID for the .env file')
+}
+
 pipeline {
     agent any
-
     environment {
-        TELEGRAM_BOT_ID = credentials("telegram-botid-yymin1022")
-        TELEGRAM_CHAT_ID = credentials("telegram-chatid-yymin1022")
-
-        CURRENT_BUILD_NUMBER = "${currentBuild.number}"
         GIT_MESSAGE = sh(returnStdout: true, script: "git log -n 1 --format=%s ${GIT_COMMIT}").trim()
         GIT_AUTHOR = sh(returnStdout: true, script: "git log -n 1 --format=%ae ${GIT_COMMIT}").trim()
         GIT_COMMIT_SHORT = sh(returnStdout: true, script: "git rev-parse --short ${GIT_COMMIT}").trim()
         GIT_INFO = "Branch(Version): ${GIT_BRANCH}\nLast Message: ${GIT_MESSAGE}\nAuthor: ${GIT_AUTHOR}\nCommit: ${GIT_COMMIT_SHORT}"
-        TEXT_BREAK = "New Build Task Started !!"
-        TEXT_PRE_BUILD = "${TEXT_BREAK}\n${GIT_INFO}\n${JOB_NAME}\n\nBuild가 시작되었습니다."
 
-        TEXT_SUCCESS_BUILD = "${JOB_NAME} Build가 성공하였습니다."
-        TEXT_FAILURE_BUILD = "${JOB_NAME} Build가 실패하였습니다."
+        DOCKERHUB_CREDENTIAL = "dockerhub-yymin1022"
+        DOCKER_IMAGE_NAME = "cecom-web"
+        DOCKER_IMAGE_STORAGE = "yymin1022"
+        DOCKER_IMAGE_TAG = "release-${BUILD_NUMBER}"
     }
 
     stages {
-        stage("Setup Build Environment") {
+        stage('Prepare Environment') {
             steps {
                 script {
-                    DOCKERHUB_CREDENTIAL = "dockerhub-yymin1022"
-                    DOCKER_IMAGE_NAME = "cecom-web"
-                    DOCKER_IMAGE_STORAGE = "yymin1022"
-                    DOCKER_IMAGE_TAG = "release-1"
-
-                    sh "curl --location --request POST 'https://api.telegram.org/bot${TELEGRAM_BOT_ID}/sendMessage' --form text='${TEXT_PRE_BUILD}' --form chat_id='${TELEGRAM_CHAT_ID}'"
+                    if (params.ENV_CREDENTIAL_ID) {
+                        withCredentials([file(credentialsId: params.ENV_CREDENTIAL_ID, variable: 'ENV_FILE')]) {
+                            sh 'cp $ENV_FILE ./.env'
+                            echo 'ENV File copied.'
+                        }
+                    } else {
+                        echo 'No .env credential ID provided. Skipping injection.'
+                    }
                 }
             }
         }
@@ -52,28 +53,25 @@ pipeline {
     }
 
     post {
+        always {
+            sh 'rm -f .env'
+        }
         success {
-            script{
-                sh "curl --location --request POST 'https://api.telegram.org/bot${TELEGRAM_BOT_ID}/sendMessage' --form text='${TEXT_SUCCESS_BUILD}' --form chat_id='${TELEGRAM_CHAT_ID}'"
-            }
-            withCredentials([string(credentialsId: 'discord-cecom-web', variable: 'DISCORD_WEBHOOK')]) {
-                discordSend description: "${TEXT_BREAK}\n${GIT_INFO}\n${JOB_NAME}\n\nBuild가 성공하였습니다.",
+            withCredentials([string(credentialsId: "discord-default", variable: "DISCORD_WEBHOOK_URL")]) {
+                discordSend description: "**Build ${BUILD_NUMBER}**가 성공하였습니다.\n\n${GIT_INFO}",
                             link: env.BUILD_URL,
                             result: currentBuild.currentResult,
                             title: env.JOB_NAME,
-                            webhookURL: "$DISCORD_WEBHOOK"
+                            webhookURL: "$DISCORD_WEBHOOK_URL"
             }
         }
         failure {
-            script{
-                sh "curl --location --request POST 'https://api.telegram.org/bot${TELEGRAM_BOT_ID}/sendMessage' --form text='${TEXT_FAILURE_BUILD}' --form chat_id='${TELEGRAM_CHAT_ID}'"
-            }
-            withCredentials([string(credentialsId: 'discord-cecom-web', variable: 'DISCORD_WEBHOOK')]) {
-                discordSend description: "${TEXT_BREAK}\n${GIT_INFO}\n${JOB_NAME}\n\nBuild가 실패하였습니다.",
+            withCredentials([string(credentialsId: "discord-default", variable: "DISCORD_WEBHOOK_URL")]) {
+                discordSend description: "**Build ${BUILD_NUMBER}**가 실패하였습니다.\n\n${GIT_INFO}",
                             link: env.BUILD_URL,
                             result: currentBuild.currentResult,
                             title: env.JOB_NAME,
-                            webhookURL: "$DISCORD_WEBHOOK"
+                            webhookURL: "$DISCORD_WEBHOOK_URL"
             }
         }
     }
